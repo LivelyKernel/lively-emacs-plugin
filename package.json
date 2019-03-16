@@ -1,0 +1,8 @@
+{
+    "name": "l2l-node",
+    "dependencies": {
+        "babel-standalone": "^6.26.0",
+        "socket.io-client": "^2.0.4",
+        "systemjs": "^0.19.47"
+    }
+}
