@@ -94,7 +94,7 @@ const commands = {
     return system.dynamicCompletionsForPrefix(
       env.targetModule,
       cmd.prefix,
-      cmd.options || {},
+      env,
     );
   },
 
