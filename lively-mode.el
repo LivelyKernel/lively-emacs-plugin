@@ -1,15 +1,34 @@
 (defvar lively-mode-map
-  (let ((map (make-sparse-keymap)))
-    ;; (define-key map "\C-j" 'newline-and-indent)
-    map)
+  (make-sparse-keymap)
   "Keymap for Lively minor mode")
+
+(define-key lively-mode-map (kbd "C-x C-e") 'lively-eval-selection-or-line)
+(define-key lively-mode-map (kbd "C-x C-p") 'lively-eval-and-print-selection-or-line)
+(define-key lively-mode-map (kbd "C-c M-p") 'lively-interactive-select-peer)
+
+(define-prefix-command 'lively-prefix-map)
+;; (define-key lively-mode-map (kbd "C-c y") 'lively-prefix-map)
+(define-key global-map (kbd "C-c y") 'lively-prefix-map)
+(define-key lively-prefix-map (kbd "s") 'lively-start)
+(define-key lively-prefix-map (kbd "q") 'lively-quit)
+(define-key lively-prefix-map (kbd "l") 'lively-show-rpc-log-buffer)
+;; (define-key lively-prefix-map (kbd ".") 'lively-eval-selection-or-line)
+;; (define-key lively-prefix-map (kbd ".") 'lively-interactive-eval)
+(define-key lively-prefix-map (kbd "<tab>") 'lively-company-backend)
+(define-key lively-prefix-map (kbd "<C-tab>") 'lively-completions-at-point)
+(define-key lively-prefix-map (kbd "p") 'lively-interactive-select-peer)
+
 
 ;;;###autoload
 (define-minor-mode lively-mode
+  "Mode for interacting with lively.next processes."
+  :init-value nil
   :lighter " lv"
   :keymap lively-mode-map
-  (message "lively mode enabled")
-  "Get your foos in the right places.")
+  (make-local-variable 'company-backends)
+  ;; (add-to-list 'company-backends '(company-tide :separate lively-company-backend))
+  (add-to-list 'company-backends '(lively-company-backend :separate company-tide))
+  (message "lively mode %s" (if lively-mode "enabled" "disabled")))
 
 ;; -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
@@ -26,13 +45,17 @@ Used to associate responses to callbacks.")
   `lively-interactively-select-peer'.")
 (make-variable-buffer-local 'lively-rpc--current-peer-id)
 
+(defvar lively-rpc--current-module-id nil
+  "Id of module used for evalution requests.")
+(make-variable-buffer-local 'lively-rpc--current-module-id)
+
 (defvar lively-rpc--buffer-p)
 (make-variable-buffer-local 'lively-rpc--buffer-p)
 
 (defvar lively-rpc--log-buffer-name)
 (make-variable-buffer-local 'lively-rpc--log-buffer-name)
 
-(defvar lively-rpc--buffer)
+(defvar lively-rpc--buffer nil)
 ;; (make-variable-buffer-local 'lively-rpc--buffer)
 
 (defvar lively-rpc--backend-root-dir)
@@ -133,7 +156,7 @@ This includes `lively-rpc-nodepath' in the NODEPATH, if set."
   ;;           process-environment)))
   )
 
-(defun lively--open (root-dir)
+(defun lively--open (server-address root-dir)
   "Start a l2l node process."
   (lively-rpc--cleanup-buffers)
   (let* ((full-node-command (executable-find "node"))
@@ -158,7 +181,9 @@ This includes `lively-rpc-nodepath' in the NODEPATH, if set."
                        (start-process name
                                       (current-buffer)
                                       full-node-command
-				      "index.js"))
+				      "index.js"
+				      "--server-address"
+				      server-address))
                    (error
                     (concat "Lively can't start Node (%s: %s)"
 			    (car err) (cadr err)))))
@@ -189,9 +214,10 @@ This includes `lively-rpc-nodepath' in the NODEPATH, if set."
             (goto-char (point-min))
             (condition-case _err
                 (progn
-                  (setq json (let ((json-array-type 'list))
+                  (setq json (let ((json-array-type 'list)
+				   (json-object-type 'hash-table))
                                (json-read)))
-                  (if (listp json)
+                  (if (or (hash-table-p json) (listp json))
                       (setq  line-end (1+ (point))
                              did-read-json t)
                     (goto-char (point-min))))
@@ -204,10 +230,12 @@ This includes `lively-rpc-nodepath' in the NODEPATH, if set."
 	      ;; 	  (insert raw-json)))
               (delete-region (point-min) line-end)
               (lively-rpc--handle-json json))
-             ((looking-at "lively.emacs started, version (\\([^ ]*\\))\n")
+             ((looking-at "lively.emacs started, version \\(.+\\)\n")
               (let ((rpc-version (match-string 1)))
                 (replace-match "")
 		(message "connected to lively.emacs version %s" rpc-version)))
+	     ((looking-at (regexp-quote "[lively.modules] SystemJS configured with lively.transpiler & babel"))
+              (delete-region (point-min) (point-max)))
              (t
               (let ((line (buffer-substring (point-min)
                                             line-end)))
@@ -226,21 +254,21 @@ This includes `lively-rpc-nodepath' in the NODEPATH, if set."
 
 (defun lively-peer-stringify (peer)
   "`peer' as returned from listPeers command"
-  (let* ((world (alist-get 'world peer))
-	 (loc (alist-get 'location peer))
-	 (type (alist-get 'type peer))
+  (let* ((world (gethash "world" peer))
+	 (loc (gethash "location" peer))
+	 (type (gethash "type" peer))
 	 (format-string (format "%s - %s" loc (or world type))))
     format-string))
 
 (defun lively-peer-helm-candidate-transformer (peer)
   ""
-  (let* ((id (alist-get 'id peer)))
+  (let* ((id (gethash "id" peer)))
     `(,(lively-peer-stringify peer)  . ,peer)))
 
 (defun lively-complete-peer-with-helm (peers &optional current-peer-id)
   "Asks user for completion of a lively peer. Returns the peer data"
   (let* ((current (loop for peer in peers
-			if (equal current-peer-id (alist-get 'id peer))
+			if (equal current-peer-id (gethash "id" peer))
 			return peer))
 	 (candidates (seq-map 'lively-peer-helm-candidate-transformer peers))
 	 (sources (helm-build-sync-source "lively peers"
@@ -254,21 +282,40 @@ This includes `lively-rpc-nodepath' in the NODEPATH, if set."
 		    )))
     (helm :prompt "Select peer: "
           :sources sources
-	  :preselect (lively-peer-stringify current)
+	  :preselect (if current (lively-peer-stringify current) "")
           :buffer "*helm lively peer selection*")))
 
 (defun lively-rpc--handle-unexpected-line (line)
   ""
   (message "unexpected line %s" line))
 
-(defun rk/lively-open ()
+(defcustom *lively-default-lively-servers*
+  '("http://localhost:9011"
+    "http://lively-next.org:9011/lively-socket.io")
+  "lively servers that are offered to connect to on start")
+
+(defvar *lively-chosen-server-history* nil
+  "Servers that were chosen at `lively-start'.")
+
+(defun lively-start (server-address)
+  "Start a lively client that connects to `server-address' which
+should identify a runnig lively.server."
+  (interactive (list
+		  (helm-comp-read "Connect to lively server: "
+		  *lively-default-lively-servers*
+		  :history *lively-chosen-server-history*)))
+  (let ((server-address (if (string-match "/lively-socket\\.io$" server-address)
+			    server-address
+			  (concat (if (string-match "/$" server-address) "" "/")
+				  "lively-socket.io"))))
+    (lively--open
+     server-address
+     (expand-file-name "~/projects/lively/emacs-plugin"))))
+
+(defun lively-quit ()
   ""
-  ;; (lively--open "/home/robertkrahn/scratch/ts_playground")
-  (lively--open (expand-file-name "~/projects/lively/emacs-plugin"))
-  ;; (pop-to-buffer lively-rpc--buffer)
-  (when-let ((log-buf (lively-rpc--get-log-buffer lively-rpc--buffer)))
-    (pop-to-buffer log-buf))
-  (pop-to-buffer "lively-mode.el"))
+  (interactive)
+  (lively-rpc--cleanup-buffers))
 
 (defun rk/lively-send (msg &optional timeout-marker timeout-secs)
   ""
@@ -284,59 +331,238 @@ This includes `lively-rpc-nodepath' in the NODEPATH, if set."
       (accept-process-output proc .5))
     (or lively-rpc--result timeout-marker)))
 
-(defun lively-fetch-peers ()
+(defun lively-send-fetch-peers-msg ()
   ""
   (let ((peer-data (rk/lively-send
 		    (let ((msg (make-hash-table)))
 		      (puthash "action" "listPeers" msg)
 		      msg))))
-    (if-let ((err (alist-get 'error peer-data)))
+    (if-let ((err (gethash "error" peer-data)))
     	err
-      (when-let ((result (alist-get 'result peer-data)))
-    	(if-let ((err (alist-get 'error result)))
+      (when-let ((peers (gethash "result" peer-data)))
+    	(if-let ((err (and (hash-table-p peers) (gethash "error" peers))))
     	    err)
-    	result))))
+    	peers))))
 
 (defun lively-interactive-select-peer ()
   ""
   (interactive)
   (let* ((current-id (buffer-local-value 'lively-rpc--current-peer-id lively-rpc--buffer))
-	 (selected (lively-complete-peer-with-helm (lively-fetch-peers) current-id))
-	 (selected-id (and selected (alist-get 'id selected))))
+	 (selected (lively-complete-peer-with-helm (lively-send-fetch-peers-msg) current-id))
+	 (selected-id (and selected (gethash "id" selected))))
     (message "Selecting %s" (if selected (lively-peer-stringify selected)
 			      "emacs l2l client"))
     (with-current-buffer lively-rpc--buffer
       (setq lively-rpc--current-peer-id selected-id))))
 
-(defun lively-eval (expr)
+(defun lively-send-eval-msg (expr &optional target-module inspect inspect-depth)
   (rk/lively-send
    (let ((target (buffer-local-value 'lively-rpc--current-peer-id lively-rpc--buffer))
 	 (msg (make-hash-table)))
      (puthash "action" "runEval" msg)
      (puthash "source" expr msg)
      (puthash "peerId" target msg)
+     (puthash "targetModulte" (or target-module "lively://emacs-plugin/dummy-module") msg)
+     (puthash "asString" t msg)
+     (puthash "inspect" inspect msg)
+     (puthash "inspectDepth" inspect-depth msg)
      msg)))
 
-(defun lively-interactive-eval (expr)
+(defun lively-send-completions-msg (prefix &optional target-module)
+  (rk/lively-send
+   (let ((target (buffer-local-value 'lively-rpc--current-peer-id lively-rpc--buffer))
+	 (msg (make-hash-table)))
+     (puthash "action" "completions" msg)
+     (puthash "prefix" prefix msg)
+     (puthash "peerId" target msg)
+     (puthash "targetModule" (or target-module "lively://emacs-plugin/dummy-module") msg)
+     msg)))
+
+(defun lively-completion-prefix-at-point ()
+  ""
+  (save-excursion
+    (loop with start = (point)
+	  for pos from (current-column) downto 0
+	  do (left-char)
+	  for stop = (and
+		      (not (in-string-p))
+		      (let ((c (char-after (point))))
+			(or (eql ?\  c) (eql ?= c))))
+	  when stop do (forward-char 1)
+	  until stop
+	  finally (return (buffer-substring-no-properties (point) start))))
+  ;; (buffer-substring-no-properties
+  ;;  (save-excursion (skip-syntax-backward "w_.") (point))
+  ;;  (point))
+  )
+
+(defun lively-completions-at-point ()
+  ""
+  (interactive)
+  (lively-completions-for-prefix (company-grab-symbol) (lively-completion-prefix-at-point)))
+
+(defun lively-completions-for-prefix (symbol prefix &optional target-module)
+  ""
+  (let* ((response (lively-send-completions-msg prefix target-module))
+	 (err (gethash "error" response))
+	 (completions (unless err
+			(loop for (proto proto-completions)
+			      in (gethash "completions" (gethash "result" response))
+			      append (loop for ea in proto-completions
+					   when (string-prefix-p symbol ea)
+					   collect `(,proto . ,ea))))))
+    (when err (error err))
+    completions))
+
+(defun lively-company-active-p ()
+  ""
+  lively-mode)
+
+(defun lively-company-backend (command &optional arg &rest ignored)
+  "A company-mode backend for Lively!"
+  (interactive (list 'interactive))
+  (cl-case command
+    ;; (require-match 'never)
+    ;; init => Called once per buffer
+
+    (init
+     (lively-company-active-p))
+
+    ;; (interactive
+    ;;  (company-begin-backend 'lively-company-backend))
+
+    ;; prefix => return the prefix at point
+    (prefix
+     (when (and (lively-company-active-p)
+		(not (company-in-string-or-comment)))
+       ;; (lively-completion-prefix-at-point)
+       (cons (company-grab-symbol) t)))
+
+    (company-backends
+     '(company-tide))
+
+    ;; candidates <prefix> => return candidates for this prefix
+    (candidates
+     (when (and (lively-company-active-p)
+		(not (company-in-string-or-comment)))
+       (lexical-let ((prefix arg))
+	 (cons :async
+	       (lambda (callback)
+		 (funcall
+		  callback
+		  (seq-map (lambda (ea)
+			     (let* (
+				    ;; (type (plist-get compl :type))
+				    ;; (module-name (plist-get compl :module_name))
+				    ;; (name (plist-get compl :name))
+				    ;;(meta (concat type (if module-name (concat " from " module-name) "")))
+				    )
+			       (propertize (cdr ea) 'meta (car ea))
+			       ;; (cdr ea)
+			       ))
+			   (lively-completions-for-prefix prefix (lively-completion-prefix-at-point) lively-rpc--current-module-id)
+			   ;; (lively-completions-at-point)
+			   )))))))
+
+    ;; sorted => t if the list is already sorted
+    ;; (sorted
+    ;;  t)
+
+    ;; duplicates => t if there could be duplicates
+    (duplicates
+     nil)
+
+    ;; annotation <candidate> => short docstring for completion buffer
+    (annotation
+     (format " (%s)" (get-text-property 0 'meta arg)))
+
+    (meta
+     (message "meta? %s" arg)
+     nil)
+    (post-completion
+     nil)))
+
+;; (add-to-list 'company-backends 'lively-company-backend)
+;; (add-to-list 'company-backends '(company-tide :separate lively-company-backend))
+;; (add-to-list 'company-backends '( lively-company-backend :separate company-tide))
+;; (pop company-backends)
+;; (setq company-backends (remove 'lively-company-backend company-backends))
+
+(defun lively-json-get (obj &rest keys)
+  ""
+  (loop for key in keys
+	while (hash-table-p obj)
+	do (setq obj (gethash key obj))
+	finally (return obj)))
+
+(defun lively-interactive-eval (expr &optional target-module inspect)
   (interactive "Sjs code: ")
-  (message "%s" (lively-eval expr)))
+  (let* ((inspect-depth (when inspect
+			  (cond
+			   ((numberp inspect) inspect)
+			   ((equal '(4) inspect) 2)
+			   ((and (consp inspect) (numberp (car inspect)))
+			    (car inspect))
+			   (t 2))))
+	 (inspect (not (null inspect)))
+	 (result-msg (lively-send-eval-msg expr target-module inspect inspect-depth))
+	 (val (lively-json-get result-msg "result" "value"))
+	 (err (or (lively-json-get result-msg "error")
+		  (and (lively-json-get result-msg "result" "isError") val))))
+    (or err val)))
+
+(defun lively-eval-selection-or-line (inspect)
+  ""
+  (interactive "P")
+  (let ((code (rk/selection-or-line-string)))
+    (rk/flash-selection-or-line)
+    (message "%s" (lively-interactive-eval code lively-rpc--current-module-id inspect))))
+
+(defun lively-eval-and-print-selection-or-line (inspect)
+  ""
+  (interactive "P")
+  (let ((code (rk/selection-or-line-string)))
+    (rk/flash-selection-or-line)
+    (let ((result (lively-interactive-eval code lively-rpc--current-module-id inspect)))
+      (when (region-active-p)
+	(let ((insertion-point (max (region-beginning) (region-end))))
+	 (deactivate-mark)
+	 (goto-char insertion-point)))
+      (insert (if (char-or-string-p result) result (prin1-to-string result))))))
+
+(defun lively-show-rpc-log-buffer ()
+  ""
+  (interactive)
+  (if lively-rpc--buffer
+      (pop-to-buffer (lively-rpc--get-log-buffer lively-rpc--buffer))
+    (message "no lively-rpc-buffer found in %s" (current-buffer))))
 
 ;; -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
+(provide 'lively-mode)
+
 (comment
+  (require 'lively-mode)
   (rk/lively-open)
 
-  (lively-interactive-select-peer)
-  (lively-interactive-eval)
+  (setq completions (lively-send-completions-msg "global.a"))
 
-  (rk/lively-send (let ((msg (make-hash-table)))
+  (lively-json-get completions "result" "prefix")
+  (lively-json-get completions "result")
+
+
+
+  (with-current-buffer "test.js"
+    (company-grab-symbol))
+
+
+  (lively-interactive-select-peer)
+  (lively-interactive-eval "1+2" )
+
+  (rk/lively-send (let ((msg (makehash-table)))
 		    (puthash "action" "runEval" msg)
 		    (puthash "source" "[typeof global, typeof window]" msg)
 		    (puthash "peerId" (buffer-local-value 'lively-rpc--current-peer-id lively-rpc--buffer) msg)
 		    msg))
 
-  (rk/lively-send (let ((msg (make-hash-table))) (puthash "action" "listPeers" msg) msg) 23)
-
-  )
-
-
+  (rk/lively-send (let ((msg (make-hash-table))) (puthash "action" "listPeers" msg) msg) 23))
