@@ -1,3 +1,6 @@
+;; -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+;; key bindings
+
 (defvar lively-mode-map
   (make-sparse-keymap)
   "Keymap for Lively minor mode")
@@ -18,6 +21,8 @@
 (define-key lively-prefix-map (kbd "<C-tab>") 'lively-completions-at-point)
 (define-key lively-prefix-map (kbd "p") 'lively-interactive-select-peer)
 
+;; -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+;; lively-mode
 
 ;;;###autoload
 (define-minor-mode lively-mode
@@ -40,22 +45,14 @@
 Used to associate responses to callbacks.")
 (make-variable-buffer-local 'lively-rpc--call-id)
 
-(defvar lively-rpc--current-peer-id nil
-  "Id of l2l peer that is the current target of the session. See
-  `lively-interactively-select-peer'.")
-(make-variable-buffer-local 'lively-rpc--current-peer-id)
-
-(defvar lively-rpc--current-module-id nil
-  "Id of module used for evalution requests.")
-(make-variable-buffer-local 'lively-rpc--current-module-id)
-
 (defvar lively-rpc--buffer-p)
 (make-variable-buffer-local 'lively-rpc--buffer-p)
 
 (defvar lively-rpc--log-buffer-name)
 (make-variable-buffer-local 'lively-rpc--log-buffer-name)
 
-(defvar lively-rpc--buffer nil)
+(defvar lively-rpc--buffer nil
+  "Helper buffer for processing received l2l messages.")
 ;; (make-variable-buffer-local 'lively-rpc--buffer)
 
 (defvar lively-rpc--backend-root-dir)
@@ -66,6 +63,39 @@ Used to associate responses to callbacks.")
 
 (defvar lively-rpc--callback-fifo (make-ring 100)
   "Stores callbacks for in-flight messages.")
+
+(defvar lively-rpc--result nil
+  "stores l2l message from lively server")
+
+;; -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+(defvar lively-rpc--current-peer-id nil
+  "Id of l2l peer that is the current target of the session. See
+  `lively-interactively-select-peer'.")
+(make-variable-buffer-local 'lively-rpc--current-peer-id)
+
+(defvar lively-rpc--current-module-id nil
+  "Id of module used for evalution requests.")
+(make-variable-buffer-local 'lively-rpc--current-module-id)
+
+;; -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+(defvar lively--local-base-path nil
+  "The path to the directory that locally hosts the lively
+  installation. Used to map lively modules to local files.")
+
+;; -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+(defcustom *lively-default-lively-servers*
+  '("http://localhost:9011"
+    "http://lively-next.org:9011/lively-socket.io")
+  "lively servers that are offered to connect to on start")
+
+(defvar *lively-chosen-server-history* nil
+  "Servers that were chosen at `lively-start'.")
+
+;; -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+;; buffer handling
 
 (defun lively-rpc--get-log-buffer (lively-rpc-buf)
   "Retrieve the log buffer"
@@ -136,6 +166,16 @@ died, this will kill the process and buffer."
     ;;         (ignore-errors
     ;;           (kill-buffer buffer))))))
     ))
+
+(defun lively-show-rpc-log-buffer ()
+  ""
+  (interactive)
+  (if lively-rpc--buffer
+      (pop-to-buffer (lively-rpc--get-log-buffer lively-rpc--buffer))
+    (message "no lively-rpc-buffer found in %s" (current-buffer))))
+
+;; -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+;; lively process
 
 (defun lively-rpc--environment ()
   "Return a `process-environment' for the RPC process.
@@ -242,7 +282,12 @@ This includes `lively-rpc-nodepath' in the NODEPATH, if set."
                 (delete-region (point-min) line-end)
                 (lively-rpc--handle-unexpected-line line))))))))))
 
-(defvar lively-rpc--result)
+(defun lively-json-get (obj &rest keys)
+  ""
+  (loop for key in keys
+	while (hash-table-p obj)
+	do (setq obj (gethash key obj))
+	finally (return obj)))
 
 (defun lively-rpc--handle-json (json)
   ""
@@ -251,6 +296,12 @@ This includes `lively-rpc-nodepath' in the NODEPATH, if set."
   ;; (let ((peers (make-hash-table))))
   )
 
+(defun lively-rpc--handle-unexpected-line (line)
+  ""
+  (message "unexpected line %s" line))
+
+;; -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+;; l2l peer selection
 
 (defun lively-peer-stringify (peer)
   "`peer' as returned from listPeers command"
@@ -284,18 +335,6 @@ This includes `lively-rpc-nodepath' in the NODEPATH, if set."
           :sources sources
 	  :preselect (if current (lively-peer-stringify current) "")
           :buffer "*helm lively peer selection*")))
-
-(defun lively-rpc--handle-unexpected-line (line)
-  ""
-  (message "unexpected line %s" line))
-
-(defcustom *lively-default-lively-servers*
-  '("http://localhost:9011"
-    "http://lively-next.org:9011/lively-socket.io")
-  "lively servers that are offered to connect to on start")
-
-(defvar *lively-chosen-server-history* nil
-  "Servers that were chosen at `lively-start'.")
 
 (defun lively-start (server-address)
   "Start a lively client that connects to `server-address' which
@@ -332,6 +371,8 @@ should identify a runnig lively.server."
       (accept-process-output proc .5))
     (or lively-rpc--result timeout-marker)))
 
+;; -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
 (defun lively-send-fetch-peers-msg ()
   ""
   (let ((peer-data (rk/lively-send
@@ -356,6 +397,8 @@ should identify a runnig lively.server."
     (with-current-buffer lively-rpc--buffer
       (setq lively-rpc--current-peer-id selected-id))))
 
+;; -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
 (defun lively-send-eval-msg (expr &optional target-module inspect inspect-depth)
   (rk/lively-send
    (let ((target (buffer-local-value 'lively-rpc--current-peer-id lively-rpc--buffer))
@@ -368,6 +411,8 @@ should identify a runnig lively.server."
      (puthash "inspect" inspect msg)
      (puthash "inspectDepth" inspect-depth msg)
      msg)))
+
+;; -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
 (defun lively-send-completions-msg (prefix &optional target-module)
   (rk/lively-send
@@ -489,12 +534,7 @@ should identify a runnig lively.server."
 ;; (pop company-backends)
 ;; (setq company-backends (remove 'lively-company-backend company-backends))
 
-(defun lively-json-get (obj &rest keys)
-  ""
-  (loop for key in keys
-	while (hash-table-p obj)
-	do (setq obj (gethash key obj))
-	finally (return obj)))
+;; -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
 (defun lively-interactive-eval (expr &optional target-module inspect)
   (interactive "Sjs code: ")
@@ -532,16 +572,15 @@ should identify a runnig lively.server."
       (push-mark)
       (insert (if (char-or-string-p result) result (prin1-to-string result))))))
 
-(defun lively-show-rpc-log-buffer ()
-  ""
-  (interactive)
-  (if lively-rpc--buffer
-      (pop-to-buffer (lively-rpc--get-log-buffer lively-rpc--buffer))
-    (message "no lively-rpc-buffer found in %s" (current-buffer))))
+;; -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+lively--local-base-path
 
 ;; -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
 (provide 'lively-mode)
+
+;; -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
 (comment
   (require 'lively-mode)
