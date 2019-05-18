@@ -306,7 +306,8 @@ should identify a runnig lively.server."
 		  :history *lively-chosen-server-history*)))
   (let ((server-address (if (string-match "/lively-socket\\.io$" server-address)
 			    server-address
-			  (concat (if (string-match "/$" server-address) "" "/")
+			  (concat server-address
+				  (if (string-match "/$" server-address) "" "/")
 				  "lively-socket.io"))))
     (lively--open
      server-address
@@ -528,6 +529,7 @@ should identify a runnig lively.server."
 	(let ((insertion-point (max (region-beginning) (region-end))))
 	 (deactivate-mark)
 	 (goto-char insertion-point)))
+      (push-mark)
       (insert (if (char-or-string-p result) result (prin1-to-string result))))))
 
 (defun lively-show-rpc-log-buffer ()
