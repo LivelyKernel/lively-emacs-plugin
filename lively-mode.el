@@ -84,6 +84,17 @@ Used to associate responses to callbacks.")
   "The path to the directory that locally hosts the lively
   installation. Used to map lively modules to local files.")
 
+(defcustom *lively-default-local-base-paths*
+  '("/home/robert/projects/lively/")
+  "Directories with local lively installations.")
+
+(defvar *lively-local-bash-paths-history* nil
+  "For completion.")
+
+(defvar lively-rpc--session-state nil
+  "System.baseURL, fetched and cached when needed.")
+(make-variable-buffer-local 'lively-rpc--session-state)
+
 ;; -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
 (defcustom *lively-default-lively-servers*
@@ -196,6 +207,16 @@ This includes `lively-rpc-nodepath' in the NODEPATH, if set."
   ;;           process-environment)))
   )
 
+(defun lively-rpc--empty-session-state ()
+  ""
+  '((system-base-url . nil)
+    (local-lively-dir . nil)))
+
+(defun lively-rpc--reset-session-state (lively-rpc-buffer)
+  ""
+  (with-current-buffer lively-rpc-buffer
+    (setq lively-rpc--session-state (lively-rpc--empty-session-state))))
+
 (defun lively--open (server-address root-dir)
   "Start a l2l node process."
   (lively-rpc--cleanup-buffers)
@@ -214,6 +235,7 @@ This includes `lively-rpc-nodepath' in the NODEPATH, if set."
             lively-rpc--backend-node-command full-node-command
 	    lively-rpc--log-buffer-name log-name
 	    lively-rpc--current-peer-id nil ;; connects to the emacs l2l client itself
+	    lively-rpc--session-state (lively-rpc--empty-session-state)
             default-directory root-dir
             proc (condition-case err
                      (let ((process-connection-type nil)
@@ -394,8 +416,13 @@ should identify a runnig lively.server."
 	 (selected-id (and selected (gethash "id" selected))))
     (message "Selecting %s" (if selected (lively-peer-stringify selected)
 			      "emacs l2l client"))
-    (with-current-buffer lively-rpc--buffer
-      (setq lively-rpc--current-peer-id selected-id))))
+    (lively-change-peer lively-rpc--buffer selected-id)))
+
+(defun lively-change-peer (lively-rpc-buffer peer-id)
+  ""
+  (with-current-buffer lively-rpc-buffer
+    (setq lively-rpc--current-peer-id peer-id)
+    (lively-rpc--reset-session-state lively-rpc-buffer)))
 
 ;; -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
@@ -574,7 +601,39 @@ should identify a runnig lively.server."
 
 ;; -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
-lively--local-base-path
+(defun lively-set-local-base-path (base-path)
+  ""
+  (interactive (list
+		(helm-comp-read "Local base path of lively installation: "
+				*lively-default-local-base-paths*
+				:history *lively-local-bash-paths-history*
+				:default lively--local-base-path)))
+  (setq lively--local-base-path base-path))
+
+(defun lively-internal-url-for-file (file-path)
+  "Returns a resource url for the file"
+  (if-let* ((lively-dir lively--local-base-path)
+	    (_ (string-prefix-p lively-dir file-path))
+	    (relative-path (f-relative file-path lively-dir)))
+      nil))
+
+(defun lively-system-base-url ()
+  ""
+  (if-let* ((buf lively-rpc--buffer))
+      (with-current-buffer buf
+	(or
+	 (alist-get 'system-base-url lively-rpc--session-state)
+	 (setq lively-rpc--session-state
+	       (cons
+		`(system-base-url . ,(lively-interactive-eval "lively.modules.System.baseURL"))
+		(remove* 'system-base-url lively-rpc--session-state :key 'car)))))))
+
+(with-current-buffer lively-rpc--buffer lively-rpc--session-state)
+(with-current-buffer lively-rpc--buffer (alist-get 'system-base-url lively-rpc--session-state))
+(with-current-buffer lively-rpc--buffer (setq lively-rpc--session-state (lively-rpc--empty-session-state)))
+(set-default 'lively-rpc--session-state nil)
+lively-rpc--session-state
+
 
 ;; -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
