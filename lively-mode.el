@@ -15,6 +15,7 @@
 (define-key lively-prefix-map (kbd "s") 'lively-start)
 (define-key lively-prefix-map (kbd "q") 'lively-quit)
 (define-key lively-prefix-map (kbd "l") 'lively-show-rpc-log-buffer)
+(define-key lively-prefix-map (kbd "d") 'lively-set-local-base-path)
 ;; (define-key lively-prefix-map (kbd ".") 'lively-eval-selection-or-line)
 ;; (define-key lively-prefix-map (kbd ".") 'lively-interactive-eval)
 (define-key lively-prefix-map (kbd "<tab>") 'lively-company-backend)
@@ -42,6 +43,8 @@
 				(lambda (ea) (string-suffix-p "lively-mode.el" ea))
 				(mapcar 'car load-history)))
   "for finding server sources")
+
+(defvar *lively-install-dir* (expand-file-name (concat *lively-mode-file* "../../../")))
 
 ;; -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
@@ -88,7 +91,7 @@ Used to associate responses to callbacks.")
   installation. Used to map lively modules to local files.")
 
 (defcustom *lively-default-local-base-paths*
-  '("/home/robert/projects/lively/")
+  (list *lively-install-dir*)
   "Directories with local lively installations.")
 
 (defvar *lively-local-bash-paths-history* nil
@@ -560,8 +563,7 @@ should identify a runnig lively.server."
 			   (lively-completions-for-prefix
 			    prefix
 			    (lively-completion-prefix-at-point)
-			    nil
-			    *lively-manual-module-id*)
+			    (or *lively-manual-module-id* (lively-buffer-module-id)))
 			   ;; (lively-completions-at-point)
 			   )))))))
 
@@ -613,14 +615,20 @@ should identify a runnig lively.server."
   (interactive "P")
   (let ((code (rk/selection-or-line-string)))
     (rk/flash-selection-or-line)
-    (message "%s" (lively-interactive-eval code nil *lively-manual-module-id* inspect))))
+    (message "%s" (lively-interactive-eval
+		   code
+		   (or *lively-manual-module-id* (lively-buffer-module-id))
+		   inspect))))
 
 (defun lively-eval-and-print-selection-or-line (inspect)
   ""
   (interactive "P")
   (let ((code (rk/selection-or-line-string)))
     (rk/flash-selection-or-line)
-    (let ((result (lively-interactive-eval code nil *lively-manual-module-id* inspect)))
+    (let ((result (lively-interactive-eval
+		   code
+		   (or *lively-manual-module-id* (lively-buffer-module-id))
+		   inspect)))
       (when (region-active-p)
 	(let ((insertion-point (max (region-beginning) (region-end))))
 	 (deactivate-mark)
@@ -655,8 +663,32 @@ should identify a runnig lively.server."
 	 (setf (system-base-url *lively-current-session*)
 	       (lively-interactive-eval "lively.modules.System.baseURL"))))))
 
-;; -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+(defun lively-system-base-dir ()
+  ""
+  (or lively--local-base-path *lively-install-dir*))
 
+(defun lively-module-id-of-file (file-path base-dir base-url)
+  ""
+  (concat base-url
+	  (if (string-suffix-p "/" base-url) "" "/")
+	  (file-relative-name file-path base-dir)))
+
+(defun lively-file-path-of-module-id (module-id base-dir base-url)
+  ""
+  (if (not (string-prefix-p base-url module-id))
+      nil
+    (string-match (concat "^" base-url "/?\\(.*\\)$")
+		  module-id)
+    (expand-file-name (match-string 1 module-id) base-dir)))
+
+(defun lively-buffer-module-id (&optional buf)
+  ""
+  (let* ((buf (or buf (current-buffer)))
+	 (file-name (buffer-file-name buf))
+	 (base-dir (lively-system-base-dir)))
+    (if (not (string-prefix-p base-dir file-name))
+	nil
+	(lively-module-id-of-file file-name base-dir (lively-system-base-url)))))
 
 ;; -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
@@ -689,4 +721,25 @@ should identify a runnig lively.server."
 		    (puthash "peerId" (buffer-local-value '*lively-current-peer-id* lively-rpc--buffer) msg)
 		    msg))
 
-  (rk/lively-send (let ((msg (make-hash-table))) (puthash "action" "listPeers" msg) msg) 23))
+  (rk/lively-send (let ((msg (make-hash-table))) (puthash "action" "listPeers" msg) msg) 23)
+
+
+  (or *lively-manual-module-id*
+      (and (buffer-file-name)))
+
+
+  (lively-module-id-of-file
+   "/mnt/shared-nvme/share/projects/lively/lively.next/lively.morphic/morph.js"
+   "/mnt/shared-nvme/share/projects/lively/lively.next/"
+   (lively-system-base-url))
+
+  (lively-file-path-of-module-id
+   "http://localhost:9011/lively.morphic/morph.js"
+   "/mnt/shared-nvme/share/projects/lively/lively.next/"
+   (lively-system-base-url))
+
+
+
+
+
+)
