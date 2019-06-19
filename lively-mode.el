@@ -84,9 +84,10 @@ Used to associate responses to callbacks.")
 
 (defcustom *lively-base-directory* nil
   "The path to the directory that locally hosts the lively
-  installation. Used to map lively modules to local files.")
+  installation. Used to map lively modules to local files."
+  :group 'lively-mode)
 
-(defcustom *lively-default-local-base-paths*
+(defvar *lively-default-local-base-paths*
   (list *lively-install-dir*)
   "Directories with local lively installations.")
 
@@ -117,7 +118,8 @@ Used to associate responses to callbacks.")
 (defcustom *lively-default-lively-servers*
   '("http://localhost:9011"
     "http://lively-next.org:9011")
-  "lively servers that are offered to connect to on start")
+  "lively servers that are offered to connect to on start"
+  :group 'lively-mode)
 
 (defvar *lively-chosen-server-history* nil
   "Servers that were chosen at `lively-start'.")
@@ -642,13 +644,6 @@ should identify a runnig lively.server."
 				:history *lively-local-bash-paths-history*
 				:default *lively-base-directory*)))
   (setq *lively-base-directory* base-path))
-
-(defun lively-internal-url-for-file (file-path)
-  "Returns a resource url for the file"
-  (if-let* ((lively-dir *lively-base-directory*)
-	    (_ (string-prefix-p lively-dir file-path))
-	    (relative-path (f-relative file-path lively-dir)))
-      nil))
 
 (defun lively-system-base-url ()
   ""
