@@ -15,7 +15,11 @@ _Supported features are:_
 
 - Connecting to arbitrary lively.2lively sessions. Each lively.2lively client connected to the initial lively server can be made a target for the above features. In particular it is possible to start a lively.2lively session from an arbitrary node.js process or browser tab and connect to it for fun or profit.
 
-*NOTE:* This is currently work in progress and should be considered to be in alpha stage.
+*NOTE:* This is currently work in progress and should be considered to be in alpha stage. In particular you will currently need to have [[https://github.com/emacs-helm/helm][helm]] and [[https://company-mode.github.io/][company]] in your Emacs to have this plugin working properly.
+
+** Requirements
+- node.js
+- Emacs 24+
 
 ** Installation
 
