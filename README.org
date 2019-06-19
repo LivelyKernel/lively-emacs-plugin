@@ -1,0 +1,77 @@
+* Emacs support for lively.next
+
+This project provides an Emacs extension that allows users to interact with lively.next runtimes from within Emacs buffers.
+
+It works by starting a node.js subprocess that connects to a lively server via
+[[https://github.com/LivelyKernel/lively.next/tree/master/lively.2lively][lively.2lively]].
+
+_Supported features are:_
+
+- Evaluation of JavaScript code snippets. If this happens within file buffers that can be mapped to a lively.next module, the proper module context is used.
+
+- Dynamic code completion via object inspection. This works with the code completion feature of [[https://livelykernel.github.io/lively.vm/][lively.vm]].
+
+- Browsing modules / source code of the lively.next runtime. All loaded code and accessible modules can be browsed. This includes both JavaScript files and "virtual" modules such as object code that is directly attached to Lively objects and morphs. (as well as any workspace opened in Lively).
+
+- Connecting to arbitrary lively.2lively sessions. Each lively.2lively client connected to the initial lively server can be made a target for the above features. In particular it is possible to start a lively.2lively session from an arbitrary node.js process or browser tab and connect to it for fun or profit.
+
+*NOTE:* This is currently work in progress and should be considered to be in alpha stage.
+
+** Installation
+
+This package is currently not on ELPA. To install:
+
+1. Clone this repository
+2. Load it into your Emacs.
+
+If you use =use-package=:
+
+#+begin_src lisp
+(use-package lively-mode
+  :load-path "/path/to/emacs-plugin/")
+#+end_src
+  
+Otherwise:
+
+#+begin_src lisp
+(require 'lively-mode "/path/to/emacs-plugin/lively-mode.el")
+#+end_src
+
+** Customize
+
+To have the module-file mapping work properly set the =*lively-base-directory*=:
+
+#+begin_src lisp
+(setq *lively-base-directory* "/path/to/lively.next/")
+#+end_src
+
+To enable the lively-mode automatically in JavaScript buffers:
+(if you use something other than js2 please substitute the hook function).
+
+#+begin_src lisp
+(add-hook 'js2-mode-hook 'lively-mode)
+#+end_src
+
+Lively mode provides a prefix-map with allows to control the lively process. I have it mapped to =C-c y=:
+
+#+begin_src lisp
+(define-key global-map (kbd "C-c y") 'lively-prefix-map)
+#+end_src
+
+This enables the following commands:
+
+- =C-c y s=: =lively-start= - connect to lively
+- =C-c y q=: =lively-quit= - disconnect from lively
+- =C-c y l=: =lively-show-rpc-log-buffer= - for debugging
+- =C-c y d=: =lively-set-local-base-path= - dynamically set =*lively-base-directory*=
+- =C-c y p=: =lively-interactive-select-peer= - switch the lively.2lively target
+
+The lively-mode also maps evaluation bindings:
+- =C-x C-e=: =lively-eval-selection-or-line= - Evaluate JS code. Result is printed in mode line via =toString=. Call with an prefix arg to have the result printed with a JSON like view.
+- =C-x C-p=: =lively-eval-and-print-selection-or-line= - Evaluate JS code and insert the printed result. Prefix-arg works as with =lively-eval-selection-or-line=
+
+** TODO
+- [ ] no hard dependency on company
+- [ ] no hard dependency on helm
+- [ ] finish browsing modules
+- [ ] ELPA
