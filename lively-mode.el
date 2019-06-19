@@ -37,6 +37,14 @@
 
 ;; -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
+(defvar *lively-mode-file* (or load-file-name
+			       (seq-find
+				(lambda (ea) (string-suffix-p "lively-mode.el" ea))
+				(mapcar 'car load-history)))
+  "for finding server sources")
+
+;; -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
 (defvar lively-rpc-logging t
   "Should a log buffer keep all the messages? Useful for debugging.")
 
@@ -370,9 +378,7 @@ should identify a runnig lively.server."
 			  (concat server-address
 				  (if (string-match "/$" server-address) "" "/")
 				  "lively-socket.io"))))
-    (lively--open
-     server-address
-     (expand-file-name "~/projects/lively/emacs-plugin"))))
+    (lively--open server-address (file-name-directory *lively-mode-file*))))
 
 (defun lively-quit ()
   ""
