@@ -1,1 +1,0 @@
-/home/robert/projects/lively/lively-system-interface/dist/lively-system-interface-only-local.js
