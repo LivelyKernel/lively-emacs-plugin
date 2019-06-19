@@ -10,14 +10,10 @@
 (define-key lively-mode-map (kbd "C-c M-p") 'lively-interactive-select-peer)
 
 (define-prefix-command 'lively-prefix-map)
-;; (define-key lively-mode-map (kbd "C-c y") 'lively-prefix-map)
-(define-key global-map (kbd "C-c y") 'lively-prefix-map)
 (define-key lively-prefix-map (kbd "s") 'lively-start)
 (define-key lively-prefix-map (kbd "q") 'lively-quit)
 (define-key lively-prefix-map (kbd "l") 'lively-show-rpc-log-buffer)
 (define-key lively-prefix-map (kbd "d") 'lively-set-local-base-path)
-;; (define-key lively-prefix-map (kbd ".") 'lively-eval-selection-or-line)
-;; (define-key lively-prefix-map (kbd ".") 'lively-interactive-eval)
 (define-key lively-prefix-map (kbd "<tab>") 'lively-company-backend)
 (define-key lively-prefix-map (kbd "<C-tab>") 'lively-completions-at-point)
 (define-key lively-prefix-map (kbd "p") 'lively-interactive-select-peer)
@@ -86,7 +82,7 @@ Used to associate responses to callbacks.")
 
 ;; -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
-(defvar lively--local-base-path nil
+(defcustom *lively-base-directory* nil
   "The path to the directory that locally hosts the lively
   installation. Used to map lively modules to local files.")
 
@@ -644,12 +640,12 @@ should identify a runnig lively.server."
 		(helm-comp-read "Local base path of lively installation: "
 				*lively-default-local-base-paths*
 				:history *lively-local-bash-paths-history*
-				:default lively--local-base-path)))
-  (setq lively--local-base-path base-path))
+				:default *lively-base-directory*)))
+  (setq *lively-base-directory* base-path))
 
 (defun lively-internal-url-for-file (file-path)
   "Returns a resource url for the file"
-  (if-let* ((lively-dir lively--local-base-path)
+  (if-let* ((lively-dir *lively-base-directory*)
 	    (_ (string-prefix-p lively-dir file-path))
 	    (relative-path (f-relative file-path lively-dir)))
       nil))
@@ -665,7 +661,7 @@ should identify a runnig lively.server."
 
 (defun lively-system-base-dir ()
   ""
-  (or lively--local-base-path *lively-install-dir*))
+  (or *lively-base-directory* *lively-install-dir*))
 
 (defun lively-module-id-of-file (file-path base-dir base-url)
   ""
@@ -737,9 +733,4 @@ should identify a runnig lively.server."
    "http://localhost:9011/lively.morphic/morph.js"
    "/mnt/shared-nvme/share/projects/lively/lively.next/"
    (lively-system-base-url))
-
-
-
-
-
-)
+  )
