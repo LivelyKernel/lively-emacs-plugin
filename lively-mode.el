@@ -77,14 +77,9 @@ Used to associate responses to callbacks.")
 
 ;; -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
-(defvar lively-rpc--current-peer-id nil
-  "Id of l2l peer that is the current target of the session. See
-  `lively-interactively-select-peer'.")
-(make-variable-buffer-local 'lively-rpc--current-peer-id)
-
-(defvar lively-rpc--current-module-id nil
+(defvar *lively-manual-module-id* nil
   "Id of module used for evalution requests.")
-(make-variable-buffer-local 'lively-rpc--current-module-id)
+(make-variable-buffer-local '*lively-manual-module-id*)
 
 ;; -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
@@ -99,15 +94,30 @@ Used to associate responses to callbacks.")
 (defvar *lively-local-bash-paths-history* nil
   "For completion.")
 
-(defvar lively-rpc--session-state nil
-  "System.baseURL, fetched and cached when needed.")
-(make-variable-buffer-local 'lively-rpc--session-state)
+;; -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+(defvar *lively-server-address* nil "")
+(make-variable-buffer-local '*lively-server-address*)
+
+(defvar *lively-sessions-of-peers* nil "")
+(make-variable-buffer-local '*lively-sessions-of-peers*)
+
+(defvar *lively-current-session* nil "")
+(make-variable-buffer-local '*lively-current-session*)
+
+(defclass lively-session ()
+  ((server-url      :accessor server-url      :initform nil :initarg :server-url)
+   (peer-id         :accessor peer-id         :initform nil :initarg :peer-id)
+   (system-base-url :accessor system-base-url :initform nil :initarg :system-base-url)
+   (local-dir       :accessor local-dir       :initform nil :initarg :local-dir)))
+
+;; (make-instance lively-session :server-url "http://localhost:9011")
 
 ;; -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
 (defcustom *lively-default-lively-servers*
   '("http://localhost:9011"
-    "http://lively-next.org:9011/lively-socket.io")
+    "http://lively-next.org:9011")
   "lively servers that are offered to connect to on start")
 
 (defvar *lively-chosen-server-history* nil
@@ -127,7 +137,7 @@ Used to associate responses to callbacks.")
     (with-current-buffer log-buffer
       (unless (equal (line-beginning-position) (point))
 	(insert "\n"))
-      (insert (format-time-string "[%FT%T SEND] "))
+      (insert (format-time-string "[%FT%T RECV] "))
       (insert string))))
 
 (defun lively-rpc--log-send (lively-rpc-buf string)
@@ -136,7 +146,7 @@ Used to associate responses to callbacks.")
     (with-current-buffer log-buffer
       (unless (equal (line-beginning-position) (point))
 	(insert "\n"))
-      (insert (format-time-string "[%FT%T RECV] "))
+      (insert (format-time-string "[%FT%T SEND] "))
       (insert string))))
 
 (defun lively-rpc--process-buffer-p (buffer)
@@ -215,15 +225,7 @@ This includes `lively-rpc-nodepath' in the NODEPATH, if set."
   ;;           process-environment)))
   )
 
-(defun lively-rpc--empty-session-state ()
-  ""
-  '((system-base-url . nil)
-    (local-lively-dir . nil)))
-
-(defun lively-rpc--reset-session-state (lively-rpc-buffer)
-  ""
-  (with-current-buffer lively-rpc-buffer
-    (setq lively-rpc--session-state (lively-rpc--empty-session-state))))
+;; -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
 (defun lively--open (server-address root-dir)
   "Start a l2l node process."
@@ -242,8 +244,8 @@ This includes `lively-rpc-nodepath' in the NODEPATH, if set."
             lively-rpc--backend-root-dir root-dir
             lively-rpc--backend-node-command full-node-command
 	    lively-rpc--log-buffer-name log-name
-	    lively-rpc--current-peer-id nil ;; connects to the emacs l2l client itself
-	    lively-rpc--session-state (lively-rpc--empty-session-state)
+	    *lively-sessions-of-peers* (make-hash-table :test 'equal)
+	    *lively-server-address* server-address
             default-directory root-dir
             proc (condition-case err
                      (let ((process-connection-type nil)
@@ -257,9 +259,12 @@ This includes `lively-rpc-nodepath' in the NODEPATH, if set."
                    (error
                     (concat "Lively can't start Node (%s: %s)"
 			    (car err) (cadr err)))))
-      (set-process-query-on-exit-flag proc nil)
+       (set-process-query-on-exit-flag proc nil)
       ;; (set-process-sentinel proc #'lively-rpc--sentinel)
       (set-process-filter proc #'lively-rpc--filter)
+
+      ;; nil => peer id of the default lively.emacs session
+      (lively-change-peer new-lively-rpc-buffer nil)
       ;; (lively-rpc-init root-dir
       ;;                  (lambda (result)
       ;; 			 (message "running! %s" result)))
@@ -303,7 +308,7 @@ This includes `lively-rpc-nodepath' in the NODEPATH, if set."
              ((looking-at "lively.emacs started, version \\(.+\\)\n")
               (let ((rpc-version (match-string 1)))
                 (replace-match "")
-		(message "connected to lively.emacs version %s" rpc-version)))
+		(lively-rpc--connection-established buffer rpc-version)))
 	     ((looking-at (regexp-quote "[lively.modules] SystemJS configured with lively.transpiler & babel"))
               (delete-region (point-min) (point-max)))
              (t
@@ -329,6 +334,13 @@ This includes `lively-rpc-nodepath' in the NODEPATH, if set."
 (defun lively-rpc--handle-unexpected-line (line)
   ""
   (message "unexpected line %s" line))
+
+(defun lively-rpc--connection-established (proc-buffer rpc-version)
+  ""
+  (with-current-buffer proc-buffer
+    (message "connected to lively.emacs version %s, server: %s\n%s"
+	     rpc-version *lively-server-address*
+	     *lively-current-session*)))
 
 ;; -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 ;; l2l peer selection
@@ -417,8 +429,8 @@ should identify a runnig lively.server."
 (defun lively-interactive-select-peer ()
   ""
   (interactive)
-  (let* ((current-id (buffer-local-value 'lively-rpc--current-peer-id lively-rpc--buffer))
-	 (selected (lively-complete-peer-with-helm (lively-send-fetch-peers-msg) current-id))
+  (let* ((current-peer-id (peer-id (buffer-local-value '*lively-current-session* lively-rpc--buffer)))
+	 (selected (lively-complete-peer-with-helm (lively-send-fetch-peers-msg) current-peer-id))
 	 (selected-id (and selected (gethash "id" selected))))
     (message "Selecting %s" (if selected (lively-peer-stringify selected)
 			      "emacs l2l client"))
@@ -427,19 +439,25 @@ should identify a runnig lively.server."
 (defun lively-change-peer (lively-rpc-buffer peer-id)
   ""
   (with-current-buffer lively-rpc-buffer
-    (setq lively-rpc--current-peer-id peer-id)
-    (lively-rpc--reset-session-state lively-rpc-buffer)))
+    (let ((session (gethash peer-id *lively-sessions-of-peers*)))
+      (if session
+	  (setf (peer-id session) peer-id)
+	(setf session (make-instance 'lively-session
+				     :server-url *lively-server-address*
+				     :peer-id peer-id))
+	(puthash peer-id session *lively-sessions-of-peers*))
+      (setf *lively-current-session* session))))
 
 ;; -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
 (defun lively-send-eval-msg (expr &optional target-module inspect inspect-depth)
   (rk/lively-send
-   (let ((target (buffer-local-value 'lively-rpc--current-peer-id lively-rpc--buffer))
+   (let ((target (peer-id (buffer-local-value '*lively-current-session* lively-rpc--buffer)))
 	 (msg (make-hash-table)))
      (puthash "action" "runEval" msg)
      (puthash "source" expr msg)
      (puthash "peerId" target msg)
-     (puthash "targetModulte" (or target-module "lively://emacs-plugin/dummy-module") msg)
+     (puthash "targetModule" (or target-module "lively://emacs-plugin/dummy-module") msg)
      (puthash "asString" t msg)
      (puthash "inspect" inspect msg)
      (puthash "inspectDepth" inspect-depth msg)
@@ -449,7 +467,7 @@ should identify a runnig lively.server."
 
 (defun lively-send-completions-msg (prefix &optional target-module)
   (rk/lively-send
-   (let ((target (buffer-local-value 'lively-rpc--current-peer-id lively-rpc--buffer))
+   (let ((target (peer-id (buffer-local-value '*lively-current-session* lively-rpc--buffer)))
 	 (msg (make-hash-table)))
      (puthash "action" "completions" msg)
      (puthash "prefix" prefix msg)
@@ -507,8 +525,8 @@ should identify a runnig lively.server."
     (init
      (lively-company-active-p))
 
-    ;; (interactive
-    ;;  (company-begin-backend 'lively-company-backend))
+    (interactive
+     (company-begin-backend 'lively-company-backend))
 
     ;; prefix => return the prefix at point
     (prefix
@@ -539,7 +557,11 @@ should identify a runnig lively.server."
 			       (propertize (cdr ea) 'meta (car ea))
 			       ;; (cdr ea)
 			       ))
-			   (lively-completions-for-prefix prefix (lively-completion-prefix-at-point) lively-rpc--current-module-id)
+			   (lively-completions-for-prefix
+			    prefix
+			    (lively-completion-prefix-at-point)
+			    nil
+			    *lively-manual-module-id*)
 			   ;; (lively-completions-at-point)
 			   )))))))
 
@@ -558,6 +580,7 @@ should identify a runnig lively.server."
     (meta
      (message "meta? %s" arg)
      nil)
+
     (post-completion
      nil)))
 
@@ -590,14 +613,14 @@ should identify a runnig lively.server."
   (interactive "P")
   (let ((code (rk/selection-or-line-string)))
     (rk/flash-selection-or-line)
-    (message "%s" (lively-interactive-eval code lively-rpc--current-module-id inspect))))
+    (message "%s" (lively-interactive-eval code nil *lively-manual-module-id* inspect))))
 
 (defun lively-eval-and-print-selection-or-line (inspect)
   ""
   (interactive "P")
   (let ((code (rk/selection-or-line-string)))
     (rk/flash-selection-or-line)
-    (let ((result (lively-interactive-eval code lively-rpc--current-module-id inspect)))
+    (let ((result (lively-interactive-eval code nil *lively-manual-module-id* inspect)))
       (when (region-active-p)
 	(let ((insertion-point (max (region-beginning) (region-end))))
 	 (deactivate-mark)
@@ -628,17 +651,11 @@ should identify a runnig lively.server."
   (if-let* ((buf lively-rpc--buffer))
       (with-current-buffer buf
 	(or
-	 (alist-get 'system-base-url lively-rpc--session-state)
-	 (setq lively-rpc--session-state
-	       (cons
-		`(system-base-url . ,(lively-interactive-eval "lively.modules.System.baseURL"))
-		(remove* 'system-base-url lively-rpc--session-state :key 'car)))))))
+	 (system-base-url *lively-current-session*)
+	 (setf (system-base-url *lively-current-session*)
+	       (lively-interactive-eval "lively.modules.System.baseURL"))))))
 
-(with-current-buffer lively-rpc--buffer lively-rpc--session-state)
-(with-current-buffer lively-rpc--buffer (alist-get 'system-base-url lively-rpc--session-state))
-(with-current-buffer lively-rpc--buffer (setq lively-rpc--session-state (lively-rpc--empty-session-state)))
-(set-default 'lively-rpc--session-state nil)
-lively-rpc--session-state
+;; -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
 
 ;; -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
@@ -659,16 +676,17 @@ lively-rpc--session-state
 
 
   (with-current-buffer "test.js"
-    (company-grab-symbol))
+    (buffer-local-value *lively-current-session* lively-rpc--buffer))
 
 
   (lively-interactive-select-peer)
   (lively-interactive-eval "1+2" )
 
+  (peer-id (buffer-local-value '*lively-current-session* lively-rpc--buffer))
   (rk/lively-send (let ((msg (makehash-table)))
 		    (puthash "action" "runEval" msg)
 		    (puthash "source" "[typeof global, typeof window]" msg)
-		    (puthash "peerId" (buffer-local-value 'lively-rpc--current-peer-id lively-rpc--buffer) msg)
+		    (puthash "peerId" (buffer-local-value '*lively-current-peer-id* lively-rpc--buffer) msg)
 		    msg))
 
   (rk/lively-send (let ((msg (make-hash-table))) (puthash "action" "listPeers" msg) msg) 23))
