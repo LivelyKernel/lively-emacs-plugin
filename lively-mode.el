@@ -7,6 +7,8 @@
 
 (define-key lively-mode-map (kbd "C-x C-e") 'lively-eval-selection-or-line)
 (define-key lively-mode-map (kbd "C-x C-p") 'lively-eval-and-print-selection-or-line)
+(define-key lively-mode-map (kbd "C-c C-c") 'lively-eval-defun)
+(define-key lively-mode-map (kbd "C-c C-k") 'lively-eval-buffer)
 (define-key lively-mode-map (kbd "C-c M-p") 'lively-interactive-select-peer)
 
 (define-prefix-command 'lively-prefix-map)
@@ -608,6 +610,18 @@ should identify a runnig lively.server."
 		  (and (lively-json-get result-msg "result" "isError") val))))
     (or err val)))
 
+(defun lively-eval-defun (inspect)
+  ""
+  (interactive "P")
+  (let ((bounds (bounds-of-thing-at-point 'defun)))
+    (destructuring-bind (from . to) bounds
+      (let ((code (buffer-substring-no-properties from to)))
+	(rk/flash-bounds bounds)
+	(message "%s" (lively-interactive-eval
+		       code
+		       (or *lively-manual-module-id* (lively-buffer-module-id))
+		       inspect))))))
+
 (defun lively-eval-selection-or-line (inspect)
   ""
   (interactive "P")
@@ -633,6 +647,18 @@ should identify a runnig lively.server."
 	 (goto-char insertion-point)))
       (push-mark)
       (insert (if (char-or-string-p result) result (prin1-to-string result))))))
+
+(defun lively-eval-buffer (&optional arg)
+  ""
+  (interactive "P")
+  (let ((from (point-min))
+        (to (point-max)))
+    (let ((code (buffer-substring-no-properties from to)))
+      (rk/flash-bounds (cons from to))
+      (message "%s" (lively-interactive-eval
+                     code
+                     (or *lively-manual-module-id* (lively-buffer-module-id))
+                     nil)))))
 
 ;; -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
